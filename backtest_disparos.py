@@ -162,7 +162,8 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True):
             print(*a)
 
     res = {"anchor": anchor, "n_fases": 0, "operado": False,
-           "realizado_R": 0.0, "estado": "", "disparos": [], "abierta": False}
+           "realizado_R": 0.0, "estado": "", "disparos": [], "abierta": False,
+           "entry": None, "R_price": None, "R_pct": None}
 
     fases = detectar_fases(hi, lo, ot, anchor, anchor_idx + 1)
     res["n_fases"] = len(fases)
@@ -177,6 +178,9 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True):
     lvl50 = anchor + 0.50 * leg
     lvl25 = anchor + 0.25 * leg
     R = lvl50 - lvl25
+    res["entry"] = lvl50
+    res["R_price"] = R
+    res["R_pct"] = R / lvl50 * 100.0
     out("=" * 70)
     out(f"  FIBO CONGELADO EN FASE 3  |  ancla={anchor:.2f}  techo={techo:.2f}")
     out(f"  0%={anchor:.2f}  25%={lvl25:.2f}  50%={lvl50:.2f}  75%="
