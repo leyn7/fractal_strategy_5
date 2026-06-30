@@ -16,12 +16,13 @@ Supuestos:
   - Cada disparo arriesga 1R. P&L en multiplos de R.
 """
 import json
+import argparse
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
 SYMBOL = "BNBUSDT"
 INTERVAL = "3m"
-ANCHOR = 540.50
+ANCHOR = 540.50  # default: minimo de la penultima sobreventa
 START_UTC = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
 FACTOR_150 = 1.5
 BOGOTA = timezone(timedelta(hours=-5))
@@ -234,4 +235,12 @@ def main():
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Backtest 4 disparos sobre un ancla")
+    ap.add_argument("--anchor", type=float, default=ANCHOR,
+                    help="precio ancla (0% del fibo)")
+    ap.add_argument("--start", type=str, default=START_UTC.strftime("%Y-%m-%dT%H:%M"),
+                    help="inicio de descarga 3m en UTC (YYYY-MM-DDTHH:MM)")
+    args = ap.parse_args()
+    ANCHOR = args.anchor
+    START_UTC = datetime.strptime(args.start, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
     main()
