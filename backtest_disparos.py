@@ -154,84 +154,105 @@ def linea(pos, entry, sl, ot):
             f"  ->  {pos['estado']:<11} {cuando}")
 
 
+def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True):
+    """Corre un setup completo (fases + 4 disparos) sobre un ancla dada.
+    anchor_idx = indice 3m del minimo (ancla). Devuelve dict con resultado."""
+    def out(*a):
+        if verbose:
+            print(*a)
+
+    res = {"anchor": anchor, "n_fases": 0, "operado": False,
+           "realizado_R": 0.0, "estado": "", "disparos": [], "abierta": False}
+
+    fases = detectar_fases(hi, lo, ot, anchor, anchor_idx + 1)
+    res["n_fases"] = len(fases)
+    if len(fases) < 3:
+        res["estado"] = f"NO OPERADO ({len(fases)} fases; faltan {3 - len(fases)})"
+        out(res["estado"])
+        return res
+
+    # Fibo congelado en la FASE 3
+    _, techo, _ = fases[2]
+    leg = techo - anchor
+    lvl50 = anchor + 0.50 * leg
+    lvl25 = anchor + 0.25 * leg
+    R = lvl50 - lvl25
+    out("=" * 70)
+    out(f"  FIBO CONGELADO EN FASE 3  |  ancla={anchor:.2f}  techo={techo:.2f}")
+    out(f"  0%={anchor:.2f}  25%={lvl25:.2f}  50%={lvl50:.2f}  75%="
+        f"{anchor + 0.75 * leg:.2f}  100%={techo:.2f}  R={R:.2f}")
+    out("=" * 70)
+
+    # Armado de la entrada por el 75%
+    entry_idx, entry_price, eventos = armar_entrada_75(
+        hi, lo, ot, anchor, fases[1][0] + 1, fases[1][1])
+    out("ARMADO (75% -> coloca/cancela orden en 50%):")
+    for i, ev, px in eventos:
+        out(f"   {fmt(ot[i])}  {ev:<22} @ {px:.2f}")
+    if entry_idx is None:
+        res["estado"] = "ARMADA pero la entrada del 50% no se lleno (o invalido)"
+        out(">> " + res["estado"])
+        return res
+    out(f">> ENTRADA LLENA en 50%={entry_price:.2f}  ({fmt(ot[entry_idx])})")
+    out("=" * 70)
+
+    res["operado"] = True
+    total_R = 0.0
+
+    # Ronda 1
+    cov, run, idx_run_close, runner_stop = simular(
+        hi, lo, ot, entry_idx + 1, lvl50, lvl25,
+        lvl50 + 1.5 * R, lvl50 + 10.0 * R,
+        "A cobertura (1:1.5)", "B runner (1:10)", R)
+    out("RONDA 1  (entry 50%, SL 25%):")
+    out(linea(cov, lvl50, lvl25, ot))
+    out(linea(run, lvl50, lvl25, ot))
+    for p in (cov, run):
+        res["disparos"].append(p["estado"])
+        if p["estado"] == "ABIERTA":
+            res["abierta"] = True
+    total_R += pnl_de(cov["estado"]) + pnl_de(run["estado"])
+
+    # Ronda 2 (market al cerrarse la Ronda 1, solo si B se fue al stop)
+    if runner_stop:
+        entry2, sl2 = lvl25, anchor
+        R2 = entry2 - sl2
+        out("-" * 70)
+        out(f"RONDA 2  (MARKET al cerrarse Ronda 1; entra ~{entry2:.2f}, "
+            f"SL 0%={sl2:.2f}, R={R2:.2f}):")
+        covC, runD, _, d_stop = simular(
+            hi, lo, ot, idx_run_close + 1, entry2, sl2,
+            entry2 + 1.5 * R2, entry2 + 10.0 * R2,
+            "C cobertura (1:1.5)", "D runner (1:10)", R2)
+        out(linea(covC, entry2, sl2, ot))
+        out(linea(runD, entry2, sl2, ot))
+        for p in (covC, runD):
+            res["disparos"].append(p["estado"])
+            if p["estado"] == "ABIERTA":
+                res["abierta"] = True
+        total_R += pnl_de(covC["estado"]) + pnl_de(runD["estado"])
+        if d_stop:
+            res["estado"] = f"INVALIDADO: el precio toco el 0% ({anchor:.2f})"
+            out("   >> " + res["estado"])
+    else:
+        out("-" * 70)
+        out("RONDA 2 no se disparo (el runner B no se cerro por stop).")
+
+    if not res["estado"]:
+        res["estado"] = "EN CURSO" if res["abierta"] else "CERRADO"
+    res["realizado_R"] = total_R
+    out("=" * 70)
+    out(f">> RESULTADO (realizado): {total_R:+.2f} R   [{res['estado']}]")
+    return res
+
+
 def main():
     kl = fetch_3m(START_UTC)[:-1]
     ot = [k[0] for k in kl]
     hi = [float(k[2]) for k in kl]
     lo = [float(k[3]) for k in kl]
-
     anchor_idx = lo.index(min(lo))         # vela del minimo (ancla) en 3m
-    fases = detectar_fases(hi, lo, ot, ANCHOR, anchor_idx + 1)
-    if len(fases) < 3:
-        print(f"Solo se detectaron {len(fases)} fases; se necesitan >=3 para operar.")
-        return
-
-    # Fibo congelado en la FASE 3
-    _, techo, techo_idx = fases[2]
-    leg = techo - ANCHOR
-    lvl50 = ANCHOR + 0.50 * leg
-    lvl25 = ANCHOR + 0.25 * leg
-    R = lvl50 - lvl25                      # = 25% del leg
-
-    print("=" * 70)
-    print(f"  FIBO CONGELADO EN FASE 3  |  ancla={ANCHOR}  techo={techo:.2f}")
-    print(f"  0%={ANCHOR:.2f}  25%={lvl25:.2f}  50%={lvl50:.2f}  75%="
-          f"{ANCHOR + 0.75 * leg:.2f}  100%={techo:.2f}  R={R:.2f}")
-    print("=" * 70)
-
-    # ---------- ARMADO DE LA ENTRADA POR EL 75% ----------
-    techo_fase2 = fases[1][1]
-    arm_start = fases[1][0] + 1            # despues de cerrar la Fase 2
-    entry_idx, entry_price, eventos = armar_entrada_75(
-        hi, lo, ot, ANCHOR, arm_start, techo_fase2)
-    print("ARMADO (75% -> coloca/cancela orden en 50%):")
-    for i, ev, px in eventos:
-        print(f"   {fmt(ot[i])}  {ev:<22} @ {px:.2f}")
-    if entry_idx is None:
-        print(">> No se llego a llenar la entrada del 50%. Sin operacion.")
-        return
-    print(f">> ENTRADA LLENA en 50%={entry_price:.2f}  ({fmt(ot[entry_idx])})")
-    print("=" * 70)
-
-    total_R = 0.0
-
-    # ---------- RONDA 1 ----------
-    tpA = lvl50 + 1.5 * R
-    tpB = lvl50 + 10.0 * R
-    cov, run, idx_run_close, runner_stop = simular(
-        hi, lo, ot, entry_idx + 1, lvl50, lvl25, tpA, tpB,
-        "A cobertura (1:1.5)", "B runner (1:10)", R)
-    print("RONDA 1  (entry 50%, SL 25%):")
-    print(linea(cov, lvl50, lvl25, ot))
-    print(linea(run, lvl50, lvl25, ot))
-    total_R += pnl_de(cov["estado"]) + pnl_de(run["estado"])
-
-    # ---------- RONDA 2 (solo si B se cerro por stop) ----------
-    if runner_stop:
-        r2_start = idx_run_close            # B stop en 25% == entry ronda 2
-        entry2 = lvl25
-        sl2 = ANCHOR
-        R2 = entry2 - sl2                   # = 25% del leg tambien
-        tpC = entry2 + 1.5 * R2
-        tpD = entry2 + 10.0 * R2
-        print("-" * 70)
-        print(f"RONDA 2  (MARKET al cerrarse Ronda 1; entra ~{entry2:.2f}, "
-              f"SL 0%={sl2:.2f}, R={R2:.2f}):")
-        covC, runD, _, d_stop = simular(
-            hi, lo, ot, r2_start + 1, entry2, sl2, tpC, tpD,
-            "C cobertura (1:1.5)", "D runner (1:10)", R2)
-        print(linea(covC, entry2, sl2, ot))
-        print(linea(runD, entry2, sl2, ot))
-        total_R += pnl_de(covC["estado"]) + pnl_de(runD["estado"])
-        if d_stop:
-            print("   >> INVALIDACION: el precio toco el 0% (540.50). Cierra todo.")
-    else:
-        print("-" * 70)
-        print("RONDA 2 no se disparo (el runner B no se cerro por stop).")
-
-    print("=" * 70)
-    print(f">> RESULTADO TOTAL (realizado): {total_R:+.2f} R")
-    print("   (posiciones 'sigue abierta' no suman hasta cerrarse)")
+    correr_setup(hi, lo, ot, ANCHOR, anchor_idx, verbose=True)
 
 
 if __name__ == "__main__":
