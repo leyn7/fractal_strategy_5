@@ -154,17 +154,20 @@ def linea(pos, entry, sl, ot):
             f"  ->  {pos['estado']:<11} {cuando}")
 
 
-def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0):
+def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
+                 max_fase=99):
     """Corre un setup completo (fases + 4 disparos) sobre un ancla dada.
     anchor_idx = indice 3m del minimo (ancla). Devuelve dict con resultado.
-    min_r_pct: si R% < umbral, el setup se descarta (fees se comen el edge)."""
+    min_r_pct: si R% < umbral, el setup se descarta (fees se comen el edge).
+    max_fase: si la primera fase operable es > max_fase, no se opera (evita
+    operar fases muy tardias/agotadas)."""
     def out(*a):
         if verbose:
             print(*a)
 
     res = {"anchor": anchor, "n_fases": 0, "operado": False,
            "realizado_R": 0.0, "estado": "", "disparos": [], "abierta": False,
-           "entry": None, "R_price": None, "R_pct": None}
+           "entry": None, "R_price": None, "R_pct": None, "fase_operada": None}
 
     fases = detectar_fases(hi, lo, ot, anchor, anchor_idx + 1)
     res["n_fases"] = len(fases)
@@ -173,8 +176,35 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0):
         out(res["estado"])
         return res
 
-    # Fibo congelado en la FASE 3
-    _, techo, _ = fases[2]
+    # Elegir la PRIMERA fase operable (>=3) cuyo R% pase el filtro.
+    # El techo crece con cada fase, asi que el R% es mayor en fases posteriores:
+    # si la fase 3 queda filtrada por R%, se prueba la 4, la 5, etc.
+    op = None
+    for p in range(2, len(fases)):
+        leg_p = fases[p][1] - anchor
+        rpct_p = (0.25 * leg_p) / (anchor + 0.50 * leg_p) * 100.0
+        if rpct_p >= min_r_pct:
+            op = p
+            break
+
+    if op is None:
+        leg_m = fases[-1][1] - anchor      # la fase mas grande disponible
+        res["R_pct"] = (0.25 * leg_m) / (anchor + 0.50 * leg_m) * 100.0
+        res["estado"] = (f"FILTRADO (ninguna de {len(fases)} fases con "
+                         f"R% >= {min_r_pct:.2f}%; max R%={res['R_pct']:.2f}%)")
+        out(">> " + res["estado"])
+        return res
+
+    if (op + 1) > max_fase:                 # primera fase operable es muy tardia
+        leg_o = fases[op][1] - anchor
+        res["R_pct"] = (0.25 * leg_o) / (anchor + 0.50 * leg_o) * 100.0
+        res["estado"] = (f"NO OPERADO (1a fase operable F{op + 1} > tope F{max_fase})")
+        out(">> " + res["estado"])
+        return res
+
+    # Fibo congelado en la fase operable elegida
+    n_fase = op + 1                        # numero de fase (1-based)
+    _, techo, _ = fases[op]
     leg = techo - anchor
     lvl50 = anchor + 0.50 * leg
     lvl25 = anchor + 0.25 * leg
@@ -182,21 +212,18 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0):
     res["entry"] = lvl50
     res["R_price"] = R
     res["R_pct"] = R / lvl50 * 100.0
+    res["fase_operada"] = n_fase
     out("=" * 70)
-    out(f"  FIBO CONGELADO EN FASE 3  |  ancla={anchor:.2f}  techo={techo:.2f}")
+    out(f"  FIBO CONGELADO EN FASE {n_fase}  |  ancla={anchor:.2f}  techo={techo:.2f}")
     out(f"  0%={anchor:.2f}  25%={lvl25:.2f}  50%={lvl50:.2f}  75%="
         f"{anchor + 0.75 * leg:.2f}  100%={techo:.2f}  R={R:.2f}  (R%={res['R_pct']:.2f}%)")
+    if op > 2:
+        out(f"  (fases 3..{n_fase - 1} quedaron bajo el filtro R% {min_r_pct:.2f}%)")
     out("=" * 70)
 
-    # Filtro de edge: si el R% es muy chico, las comisiones se lo comen
-    if res["R_pct"] < min_r_pct:
-        res["estado"] = f"FILTRADO (R%={res['R_pct']:.2f}% < {min_r_pct:.2f}%)"
-        out(">> " + res["estado"] + " -> no se opera")
-        return res
-
-    # Armado de la entrada por el 75%
+    # Armado de la entrada por el 75% (la fase previa es la op-1)
     entry_idx, entry_price, eventos = armar_entrada_75(
-        hi, lo, ot, anchor, fases[1][0] + 1, fases[1][1])
+        hi, lo, ot, anchor, fases[op - 1][0] + 1, fases[op - 1][1])
     out("ARMADO (75% -> coloca/cancela orden en 50%):")
     for i, ev, px in eventos:
         out(f"   {fmt(ot[i])}  {ev:<22} @ {px:.2f}")

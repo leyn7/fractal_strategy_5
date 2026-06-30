@@ -56,6 +56,8 @@ def main():
                     help="ventana (dias) para buscar sobreventas")
     ap.add_argument("--min-r", type=float, default=0.5,
                     help="R%% minimo para operar un setup (filtro de comisiones)")
+    ap.add_argument("--max-fase", type=int, default=4,
+                    help="fase operable maxima (evita operar fases tardias/agotadas)")
     args = ap.parse_args()
 
     anclas = anclas_sobreventa(args.days)
@@ -72,7 +74,7 @@ def main():
 
     print("#" * 70)
     print(f"  MULTI-SETUP  |  {len(anclas)} sobreventas RSI 1H (ultimos {args.days} dias)"
-          f"  |  filtro R% >= {args.min_r}%")
+          f"  |  filtro R% >= {args.min_r}%  |  tope F{args.max_fase}")
     print("#" * 70)
 
     resumen = []
@@ -86,15 +88,16 @@ def main():
             continue
         aidx = min(win, key=lambda k: lo3[k])   # vela 3m del minimo
         res = bt.correr_setup(hi3, lo3, ot3, aprice, aidx, verbose=True,
-                              min_r_pct=args.min_r)
+                              min_r_pct=args.min_r, max_fase=args.max_fase)
         resumen.append((aprice, atime, res))
 
     # ---------- RESUMEN COMBINADO ----------
     print("\n" + "=" * 70)
     print("  RESUMEN COMBINADO (todos los setups en paralelo)")
     print("=" * 70)
-    print(f"  {'ancla':>8}  {'sobreventa':>12}  {'fases':>5}  {'realizado':>10}  estado")
-    print("  " + "-" * 64)
+    print(f"  {'ancla':>8}  {'sobreventa':>12}  {'fases':>5}  {'opera':>5}  "
+          f"{'realizado':>10}  estado")
+    print("  " + "-" * 70)
     total = 0.0
     abiertos = 0
     operados = 0
@@ -105,7 +108,8 @@ def main():
         if res["operado"]:
             operados += 1
         rstr = f"{res['realizado_R']:+.2f}R" if res["operado"] else "--"
-        print(f"  {aprice:>8.2f}  {fmt(atime):>12}  {res['n_fases']:>5}  "
+        fstr = f"F{res['fase_operada']}" if res["fase_operada"] else "--"
+        print(f"  {aprice:>8.2f}  {fmt(atime):>12}  {res['n_fases']:>5}  {fstr:>5}  "
               f"{rstr:>10}  {res['estado']}")
     print("  " + "-" * 64)
     print(f"  Setups operados: {operados}/{len(resumen)}   |   con posiciones abiertas: {abiertos}")
