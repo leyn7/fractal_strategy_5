@@ -187,14 +187,14 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
     op = None
     for p in range(min_fase - 1, len(fases)):
         leg_p = fases[p][1] - anchor
-        rpct_p = (0.25 * leg_p) / (anchor + 0.50 * leg_p) * 100.0
+        rpct_p = (0.25 * leg_p) / abs(anchor + 0.50 * leg_p) * 100.0
         if rpct_p >= min_r_pct:
             op = p
             break
 
     if op is None:
         leg_m = fases[-1][1] - anchor      # la fase mas grande disponible
-        res["R_pct"] = (0.25 * leg_m) / (anchor + 0.50 * leg_m) * 100.0
+        res["R_pct"] = (0.25 * leg_m) / abs(anchor + 0.50 * leg_m) * 100.0
         res["estado"] = (f"FILTRADO (ninguna de {len(fases)} fases con "
                          f"R% >= {min_r_pct:.2f}%; max R%={res['R_pct']:.2f}%)")
         out(">> " + res["estado"])
@@ -202,7 +202,7 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
 
     if (op + 1) > max_fase:                 # primera fase operable es muy tardia
         leg_o = fases[op][1] - anchor
-        res["R_pct"] = (0.25 * leg_o) / (anchor + 0.50 * leg_o) * 100.0
+        res["R_pct"] = (0.25 * leg_o) / abs(anchor + 0.50 * leg_o) * 100.0
         res["estado"] = (f"NO OPERADO (1a fase operable F{op + 1} > tope F{max_fase})")
         out(">> " + res["estado"])
         return res
@@ -216,7 +216,7 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
     R = lvl50 - lvl25
     res["entry"] = lvl50
     res["R_price"] = R
-    res["R_pct"] = R / lvl50 * 100.0
+    res["R_pct"] = R / abs(lvl50) * 100.0
     res["fase_operada"] = n_fase
     out("=" * 70)
     out(f"  FIBO CONGELADO EN FASE {n_fase}  |  ancla={anchor:.2f}  techo={techo:.2f}")
