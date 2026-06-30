@@ -112,16 +112,19 @@ def armar_entrada_75(hi, lo, ot, anchor, start, techo_fase2):
     return None, None, eventos
 
 
-def simular(hi, lo, ot, start, entry, sl, tp_cov, tp_run, etq_cov, etq_run, r_price):
-    """Simula 2 disparos (cobertura + runner) con mismo entry y SL.
-    Devuelve (resultados, idx_cierre_runner, runner_stopped)."""
+def simular(hi, lo, ot, start, entry, sl, tp_cov, tp_run, etq_cov, etq_run, r_price,
+            rr_run=10.0, con_runner=True):
+    """Simula la cobertura (+1.5R) y, si con_runner, un runner (+rr_run R)
+    con mismo entry y SL. Devuelve (cov, run, idx_cierre_runner, runner_stopped)."""
     cov = {"name": etq_cov, "tp": tp_cov, "rr": 1.5, "estado": "ABIERTA", "i": None}
-    run = {"name": etq_run, "tp": tp_run, "rr": 10.0, "estado": "ABIERTA", "i": None}
+    run = {"name": etq_run, "tp": tp_run, "rr": rr_run,
+           "estado": "ABIERTA" if con_runner else "N/A", "i": None}
     idx_run_close = None
     runner_stopped = False
+    pos_sim = (cov, run) if con_runner else (cov,)
     for i in range(start, len(hi)):
         h, l = hi[i], lo[i]
-        for pos in (cov, run):
+        for pos in pos_sim:
             if pos["estado"] != "ABIERTA":
                 continue
             if l <= sl:                      # SL primero (conservador)
@@ -135,7 +138,7 @@ def simular(hi, lo, ot, start, entry, sl, tp_cov, tp_run, etq_cov, etq_run, r_pr
                 pos["i"] = i
                 if pos is run:
                     idx_run_close = i
-        if cov["estado"] != "ABIERTA" and run["estado"] != "ABIERTA":
+        if all(p["estado"] != "ABIERTA" for p in pos_sim):
             break
     return cov, run, idx_run_close, runner_stopped
 
@@ -155,12 +158,14 @@ def linea(pos, entry, sl, ot):
 
 
 def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
-                 max_fase=99):
+                 max_fase=99, runner_rr=10.0, r2_mode="full", min_fase=3):
     """Corre un setup completo (fases + 4 disparos) sobre un ancla dada.
     anchor_idx = indice 3m del minimo (ancla). Devuelve dict con resultado.
     min_r_pct: si R% < umbral, el setup se descarta (fees se comen el edge).
     max_fase: si la primera fase operable es > max_fase, no se opera (evita
-    operar fases muy tardias/agotadas)."""
+    operar fases muy tardias/agotadas).
+    runner_rr: objetivo del runner (multiplo de R, default 10).
+    r2_mode: 'full' (C+D) | 'cover' (solo C) | 'none' (sin Ronda 2)."""
     def out(*a):
         if verbose:
             print(*a)
@@ -171,16 +176,16 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
 
     fases = detectar_fases(hi, lo, ot, anchor, anchor_idx + 1)
     res["n_fases"] = len(fases)
-    if len(fases) < 3:
-        res["estado"] = f"NO OPERADO ({len(fases)} fases; faltan {3 - len(fases)})"
+    if len(fases) < min_fase:
+        res["estado"] = f"NO OPERADO ({len(fases)} fases; faltan {min_fase - len(fases)})"
         out(res["estado"])
         return res
 
-    # Elegir la PRIMERA fase operable (>=3) cuyo R% pase el filtro.
+    # Elegir la PRIMERA fase operable (>=min_fase) cuyo R% pase el filtro.
     # El techo crece con cada fase, asi que el R% es mayor en fases posteriores:
-    # si la fase 3 queda filtrada por R%, se prueba la 4, la 5, etc.
+    # si la fase min queda filtrada por R%, se prueba la siguiente, etc.
     op = None
-    for p in range(2, len(fases)):
+    for p in range(min_fase - 1, len(fases)):
         leg_p = fases[p][1] - anchor
         rpct_p = (0.25 * leg_p) / (anchor + 0.50 * leg_p) * 100.0
         if rpct_p >= min_r_pct:
@@ -217,13 +222,18 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
     out(f"  FIBO CONGELADO EN FASE {n_fase}  |  ancla={anchor:.2f}  techo={techo:.2f}")
     out(f"  0%={anchor:.2f}  25%={lvl25:.2f}  50%={lvl50:.2f}  75%="
         f"{anchor + 0.75 * leg:.2f}  100%={techo:.2f}  R={R:.2f}  (R%={res['R_pct']:.2f}%)")
-    if op > 2:
-        out(f"  (fases 3..{n_fase - 1} quedaron bajo el filtro R% {min_r_pct:.2f}%)")
+    if op > min_fase - 1:
+        out(f"  (fases {min_fase}..{n_fase - 1} quedaron bajo el filtro R% {min_r_pct:.2f}%)")
     out("=" * 70)
 
-    # Armado de la entrada por el 75% (la fase previa es la op-1)
+    # Armado de la entrada por el 75%. La "fase previa" es la op-1; para la
+    # fase 1 (op==0) la referencia previa es el propio ancla.
+    if op >= 1:
+        prev_idx, prev_techo = fases[op - 1][0], fases[op - 1][1]
+    else:
+        prev_idx, prev_techo = anchor_idx, anchor
     entry_idx, entry_price, eventos = armar_entrada_75(
-        hi, lo, ot, anchor, fases[op - 1][0] + 1, fases[op - 1][1])
+        hi, lo, ot, anchor, prev_idx + 1, prev_techo)
     out("ARMADO (75% -> coloca/cancela orden en 50%):")
     for i, ev, px in eventos:
         out(f"   {fmt(ot[i])}  {ev:<22} @ {px:.2f}")
@@ -237,11 +247,11 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
     res["operado"] = True
     total_R = 0.0
 
-    # Ronda 1
+    # Ronda 1  (A cobertura 1.5R, B runner runner_rr R)
     cov, run, idx_run_close, runner_stop = simular(
         hi, lo, ot, entry_idx + 1, lvl50, lvl25,
-        lvl50 + 1.5 * R, lvl50 + 10.0 * R,
-        "A cobertura (1:1.5)", "B runner (1:10)", R)
+        lvl50 + 1.5 * R, lvl50 + runner_rr * R,
+        "A cobertura (1:1.5)", f"B runner (1:{runner_rr:g})", R, rr_run=runner_rr)
     out("RONDA 1  (entry 50%, SL 25%):")
     out(linea(cov, lvl50, lvl25, ot))
     out(linea(run, lvl50, lvl25, ot))
@@ -252,26 +262,33 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0,
     total_R += pnl_de(cov["estado"]) + pnl_de(run["estado"])
 
     # Ronda 2 (market al cerrarse la Ronda 1, solo si B se fue al stop)
-    if runner_stop:
+    if r2_mode != "none" and runner_stop:
+        con_runner = (r2_mode == "full")
         entry2, sl2 = lvl25, anchor
         R2 = entry2 - sl2
         out("-" * 70)
-        out(f"RONDA 2  (MARKET al cerrarse Ronda 1; entra ~{entry2:.2f}, "
-            f"SL 0%={sl2:.2f}, R={R2:.2f}):")
-        covC, runD, _, d_stop = simular(
+        out(f"RONDA 2  ({r2_mode}; entra ~{entry2:.2f}, SL 0%={sl2:.2f}, R={R2:.2f}):")
+        covC, runD, _, _ = simular(
             hi, lo, ot, idx_run_close + 1, entry2, sl2,
-            entry2 + 1.5 * R2, entry2 + 10.0 * R2,
-            "C cobertura (1:1.5)", "D runner (1:10)", R2)
+            entry2 + 1.5 * R2, entry2 + runner_rr * R2,
+            "C cobertura (1:1.5)", f"D runner (1:{runner_rr:g})", R2,
+            rr_run=runner_rr, con_runner=con_runner)
         out(linea(covC, entry2, sl2, ot))
-        out(linea(runD, entry2, sl2, ot))
-        for p in (covC, runD):
+        if con_runner:
+            out(linea(runD, entry2, sl2, ot))
+        shots2 = (covC, runD) if con_runner else (covC,)
+        for p in shots2:
             res["disparos"].append(p["estado"])
             if p["estado"] == "ABIERTA":
                 res["abierta"] = True
-        total_R += pnl_de(covC["estado"]) + pnl_de(runD["estado"])
-        if d_stop:
+        total_R += sum(pnl_de(p["estado"]) for p in shots2)
+        # invalidacion: cualquier disparo de Ronda 2 (SL en el ancla) que se detiene
+        if any(p["estado"].startswith("STOP") for p in shots2):
             res["estado"] = f"INVALIDADO: el precio toco el 0% ({anchor:.2f})"
             out("   >> " + res["estado"])
+    elif r2_mode == "none":
+        out("-" * 70)
+        out("RONDA 2 desactivada (r2_mode=none).")
     else:
         out("-" * 70)
         out("RONDA 2 no se disparo (el runner B no se cerro por stop).")
