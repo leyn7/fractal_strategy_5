@@ -154,9 +154,10 @@ def linea(pos, entry, sl, ot):
             f"  ->  {pos['estado']:<11} {cuando}")
 
 
-def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True):
+def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True, min_r_pct=0.0):
     """Corre un setup completo (fases + 4 disparos) sobre un ancla dada.
-    anchor_idx = indice 3m del minimo (ancla). Devuelve dict con resultado."""
+    anchor_idx = indice 3m del minimo (ancla). Devuelve dict con resultado.
+    min_r_pct: si R% < umbral, el setup se descarta (fees se comen el edge)."""
     def out(*a):
         if verbose:
             print(*a)
@@ -184,8 +185,14 @@ def correr_setup(hi, lo, ot, anchor, anchor_idx, verbose=True):
     out("=" * 70)
     out(f"  FIBO CONGELADO EN FASE 3  |  ancla={anchor:.2f}  techo={techo:.2f}")
     out(f"  0%={anchor:.2f}  25%={lvl25:.2f}  50%={lvl50:.2f}  75%="
-        f"{anchor + 0.75 * leg:.2f}  100%={techo:.2f}  R={R:.2f}")
+        f"{anchor + 0.75 * leg:.2f}  100%={techo:.2f}  R={R:.2f}  (R%={res['R_pct']:.2f}%)")
     out("=" * 70)
+
+    # Filtro de edge: si el R% es muy chico, las comisiones se lo comen
+    if res["R_pct"] < min_r_pct:
+        res["estado"] = f"FILTRADO (R%={res['R_pct']:.2f}% < {min_r_pct:.2f}%)"
+        out(">> " + res["estado"] + " -> no se opera")
+        return res
 
     # Armado de la entrada por el 75%
     entry_idx, entry_price, eventos = armar_entrada_75(

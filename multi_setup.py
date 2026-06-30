@@ -54,6 +54,8 @@ def main():
     ap = argparse.ArgumentParser(description="Multi-setup automatico")
     ap.add_argument("--days", type=int, default=7,
                     help="ventana (dias) para buscar sobreventas")
+    ap.add_argument("--min-r", type=float, default=0.5,
+                    help="R%% minimo para operar un setup (filtro de comisiones)")
     args = ap.parse_args()
 
     anclas = anclas_sobreventa(args.days)
@@ -69,7 +71,8 @@ def main():
     lo3 = [float(k[3]) for k in kl3]
 
     print("#" * 70)
-    print(f"  MULTI-SETUP  |  {len(anclas)} sobreventas RSI 1H (ultimos {args.days} dias)")
+    print(f"  MULTI-SETUP  |  {len(anclas)} sobreventas RSI 1H (ultimos {args.days} dias)"
+          f"  |  filtro R% >= {args.min_r}%")
     print("#" * 70)
 
     resumen = []
@@ -82,7 +85,8 @@ def main():
             print("  (sin datos 3m para esta ancla)")
             continue
         aidx = min(win, key=lambda k: lo3[k])   # vela 3m del minimo
-        res = bt.correr_setup(hi3, lo3, ot3, aprice, aidx, verbose=True)
+        res = bt.correr_setup(hi3, lo3, ot3, aprice, aidx, verbose=True,
+                              min_r_pct=args.min_r)
         resumen.append((aprice, atime, res))
 
     # ---------- RESUMEN COMBINADO ----------
